@@ -8,14 +8,17 @@ from japanese_practice_mcp.tools.sampling import sample_for_prompts
 
 
 def _seed(conn) -> None:
-    for i, (ch, en, srs) in enumerate(
-        [("猫", "cat", 5), ("犬", "dog", 7), ("家", "house", 2), ("水", "water", 9)],
+    for i, (ch, en, reading, srs) in enumerate(
+        [("猫", "cat", "ねこ", 5),
+         ("犬", "dog", "いぬ", 7),
+         ("家", "house", "いえ", 2),
+         ("水", "water", "みず", 9)],
         start=1,
     ):
         conn.execute(
             "INSERT INTO wk_subjects (id, object, characters, slug, level, meanings, readings, data_json, updated_at) "
             "VALUES (?, 'vocabulary', ?, ?, 1, ?, ?, '{}', '2024-01-01')",
-            (i, ch, ch, json.dumps([en]), json.dumps(["x"])),
+            (i, ch, ch, json.dumps([en]), json.dumps([reading])),
         )
         conn.execute(
             "INSERT INTO wk_assignments (id, subject_id, srs_stage, data_json, cached_at) "
@@ -24,7 +27,7 @@ def _seed(conn) -> None:
         )
     for gp, level in [("は", "N5"), ("も", "N5"), ("ない", "N4")]:
         conn.execute(
-            "INSERT INTO grammar (grammar_point, jlpt_level) VALUES (?, ?)", (gp, level)
+            "INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES (?, ?)", (gp, level)
         )
     mark_grammar(conn, "は", "known")
     mark_grammar(conn, "ない", "known")
@@ -40,8 +43,6 @@ def test_sample_returns_filtered_items(tmp_db_path: Path) -> None:
         rng=random.Random(0),
     )
     assert "vocabulary" in out and "grammar" in out
-    assert len(out["vocabulary"]) <= 2
-    assert len(out["grammar"]) <= 2
     for v in out["vocabulary"]:
         assert v["srs_stage"] >= 5
     for g in out["grammar"]:

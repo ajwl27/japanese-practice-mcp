@@ -13,7 +13,12 @@ def sample_for_prompts(
     grammar_filter: dict | None = None,
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
-    """Return a random sample of vocab + grammar matching the filters."""
+    """Return a random sample of vocab + grammar matching the filters.
+
+    Vocab is automatically pre-filtered to exclude fading/struggling/buried by
+    list_known_vocabulary, so "give me prompts using stuff I solidly know" works
+    naturally.
+    """
     rng = rng or random.Random()
     vocab_filter = vocab_filter or {}
     grammar_filter = grammar_filter or {}
@@ -22,7 +27,6 @@ def sample_for_prompts(
         conn,
         min_srs_stage=vocab_filter.get("min_srs_stage", 5),
         limit=10_000,
-        source_filter=vocab_filter.get("source_filter"),
     )
     grammar_pool = list_known_grammar(
         conn,
