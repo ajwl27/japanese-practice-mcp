@@ -38,12 +38,36 @@ def _create_v1(db_path: Path) -> sqlite3.Connection:
 def test_fresh_db_jumps_to_latest(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path)
     init_schema(conn)
-    assert _current_version(conn) == 2
+    assert _current_version(conn) == 3
     names = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
     assert "grammar_seed" in names
     assert "grammar" not in names
+    assert "grammar_practice_events" in names
+    assert "vocabulary_practice_events" in names
+
+
+def test_v2_db_upgrades_to_v3_adds_event_tables(tmp_db_path: Path) -> None:
+    """Simulate a v2 DB (schema_version=2) and confirm migration 003 adds event tables."""
+    conn = connect(tmp_db_path)
+    conn.executescript("""
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT);
+        INSERT INTO schema_version (version, applied_at) VALUES (2, datetime('now'));
+        CREATE TABLE production_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT NOT NULL, my_answer TEXT NOT NULL,
+            correct_answer TEXT NOT NULL, verdict TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+    init_schema(conn)
+    names = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    assert "grammar_practice_events" in names
+    assert "vocabulary_practice_events" in names
+    assert _current_version(conn) == 3
 
 
 def test_v1_db_migrates_grammar_data(tmp_db_path: Path) -> None:
@@ -86,4 +110,4 @@ def test_migration_is_idempotent(tmp_db_path: Path) -> None:
     conn = _create_v1(tmp_db_path)
     init_schema(conn)
     init_schema(conn)
-    assert _current_version(conn) == 2
+    assert _current_version(conn) == 3

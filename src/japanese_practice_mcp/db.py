@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_V2 = """
+SCHEMA_V3 = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -90,6 +90,28 @@ CREATE TABLE IF NOT EXISTS walk_state (
     last_grammar_point  TEXT,
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS grammar_practice_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    grammar_point TEXT NOT NULL,
+    attempt_id    INTEGER NOT NULL,
+    verdict       TEXT NOT NULL,
+    attempted_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (attempt_id) REFERENCES production_attempts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_gpe_point_time ON grammar_practice_events(grammar_point, attempted_at);
+
+CREATE TABLE IF NOT EXISTS vocabulary_practice_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id   INTEGER,
+    word_form    TEXT,
+    attempt_id   INTEGER NOT NULL,
+    verdict      TEXT NOT NULL,
+    attempted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (attempt_id) REFERENCES production_attempts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_vpe_subject_time ON vocabulary_practice_events(subject_id, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_vpe_word_time ON vocabulary_practice_events(word_form, attempted_at);
 """
 
 

@@ -17,6 +17,7 @@ def test_init_schema_creates_tables(tmp_db_path: Path) -> None:
         "expressions", "mined_words", "wk_overrides",
         "stuck_phrases", "production_attempts",
         "tool_audit", "walk_state", "schema_version",
+        "grammar_practice_events", "vocabulary_practice_events",
     }
     assert expected.issubset(names), f"missing: {expected - names}"
     assert "grammar" not in names, "legacy grammar table should not exist"

@@ -12,7 +12,7 @@ it carries existing data forward.
 import sqlite3
 from typing import Callable
 
-from japanese_practice_mcp.db import SCHEMA_V2
+from japanese_practice_mcp.db import SCHEMA_V3
 
 
 def _ensure_version_table(conn: sqlite3.Connection) -> None:
@@ -40,7 +40,7 @@ def _has_legacy_grammar_table(conn: sqlite3.Connection) -> bool:
 
 def migration_002_strip_metadata(conn: sqlite3.Connection) -> None:
     """v0.1 → v0.2: split grammar, rename unknown_words → mined_words, add new tables."""
-    conn.executescript(SCHEMA_V2)
+    conn.executescript(SCHEMA_V3)
 
     if _has_legacy_grammar_table(conn):
         conn.execute(
@@ -67,11 +67,21 @@ def migration_002_strip_metadata(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(walk_state)").fetchall()}
     if "current_grammar_id" in cols:
         conn.execute("DROP TABLE walk_state")
-        conn.executescript(SCHEMA_V2)
+        conn.executescript(SCHEMA_V3)
+
+
+def migration_003_practice_events(conn: sqlite3.Connection) -> None:
+    """v0.2 → v0.3: add grammar_practice_events and vocabulary_practice_events tables.
+
+    Existing production_attempts rows are NOT backfilled — practice-signal
+    calculations treat them as if they exercised nothing.
+    """
+    conn.executescript(SCHEMA_V3)
 
 
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (2, migration_002_strip_metadata),
+    (3, migration_003_practice_events),
 ]
 
 
@@ -79,7 +89,7 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     """Apply all migrations newer than the DB's current version."""
     current = _current_version(conn)
     if current == 0 and not _has_legacy_grammar_table(conn):
-        conn.executescript(SCHEMA_V2)
+        conn.executescript(SCHEMA_V3)
         target = max(v for v, _ in MIGRATIONS)
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (target,))
         return
