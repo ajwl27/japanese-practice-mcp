@@ -8,11 +8,14 @@ from japanese_practice_mcp.audit import audit
 from japanese_practice_mcp.config import Config, load_config
 from japanese_practice_mcp.db import connect, init_schema
 from japanese_practice_mcp.seed import DEFAULT_SEED_PATH, seed_grammar_from_bunpro
+from japanese_practice_mcp.tools import bulk as bulk_tools
+from japanese_practice_mcp.tools import calibration as calibration_tools
 from japanese_practice_mcp.tools import grammar as grammar_tools
 from japanese_practice_mcp.tools import logs as log_tools
 from japanese_practice_mcp.tools import overrides as override_tools
 from japanese_practice_mcp.tools import priority as priority_tools
 from japanese_practice_mcp.tools import sampling as sampling_tools
+from japanese_practice_mcp.tools import status as status_tools
 from japanese_practice_mcp.tools import vocabulary as vocab_tools
 from japanese_practice_mcp.wanikani import (
     StalenessError,
@@ -131,15 +134,34 @@ def build_app() -> FastMCP:
     def list_known_grammar(
         status_filter: list[str] | None = None,
         level_filter: list[str] | None = None,
+        raw: bool = False,
     ) -> dict[str, Any]:
         """List grammar points matching the filters.
 
-        Items the user hasn't marked yet are returned with status='unknown'.
-        status_filter values: unknown, learning, known, mastered.
-        level_filter values: N5, N4, N3, N2, N1.
+        By default returns items whose *effective* status (combining manual +
+        practice history) is in (known, solid, mastered). Practice signal of
+        solid/weak overrides the user's self-reported status.
+
+        status_filter: filter on effective_status (or raw manual_status if raw=True)
+        level_filter: JLPT levels (N5..N1)
+        raw: when True, status_filter applies to raw manual_status and the
+          response items have a v0.2-shaped 'status' field.
+
+        If the DB is largely unmarked, the response includes a calibration_hint
+        pointing Claude toward quick_calibration() rather than a 600-item walk.
         """
-        items = grammar_tools.list_known_grammar(_conn(), status_filter, level_filter)
-        return {"items": items, "count": len(items)}
+        items = grammar_tools.list_known_grammar(
+            _conn(), status_filter, level_filter, raw
+        )
+        response: dict[str, Any] = {"items": items, "count": len(items)}
+        cal = calibration_tools.quick_calibration(_conn())
+        if cal["needs_calibration"]:
+            response["calibration_hint"] = {
+                "needs_calibration": True,
+                "message": cal["message"],
+                "next_tool": "quick_calibration",
+            }
+        return response
 
     @mcp.tool()
     @audit(_conn, "mark_grammar")
@@ -157,6 +179,64 @@ def build_app() -> FastMCP:
         without writing — disambiguate with the user and retry.
         """
         return grammar_tools.mark_grammar(_conn(), query, status, note)
+
+    @mcp.tool()
+    @audit(_conn, "bulk_mark_grammar")
+    def bulk_mark_grammar(
+        filter: dict,
+        status: Literal["learning", "known", "mastered"],
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Set status on every grammar point matching the filter — fast onboarding.
+
+        Filter shapes (combine freely):
+          {"level": "N5"} or {"level": ["N5", "N4"]}
+          {"points": ["〜ても", "〜ながら"]}
+          {"except": ["〜たり"]}
+          {"current_status": "unknown"}  — only touch points currently in this status
+
+        Examples:
+          bulk_mark_grammar({"level": ["N5", "N4"]}, "known")
+          bulk_mark_grammar({"level": "N5", "except": ["〜のなかで〜がいちばん〜"]}, "known")
+          bulk_mark_grammar({"current_status": "unknown", "level": "N5"}, "known")
+        """
+        return bulk_tools.bulk_mark_grammar(_conn(), filter, status, note)
+
+    @mcp.tool()
+    @audit(_conn, "grammar_status")
+    def grammar_status(query: str) -> dict[str, Any]:
+        """Report manual + practice + effective status for one grammar point.
+
+        Returns grammar_point, jlpt_level, manual_status, practice_signal,
+        effective_status, successes_30d, failures_30d, last_practiced.
+
+        On ambiguous fuzzy match returns {"resolved": None, "candidates": [...]}.
+        """
+        return status_tools.grammar_status(_conn(), query)
+
+    @mcp.tool()
+    @audit(_conn, "vocabulary_status")
+    def vocabulary_status(query: str) -> dict[str, Any]:
+        """Report SRS + override + practice + effective status for one WK item.
+
+        Returns characters, srs_stage, override_status, practice_signal,
+        effective_status, successes_30d, failures_30d, last_practiced.
+
+        On ambiguous fuzzy match returns {"resolved": None, "candidates": [...]}.
+        """
+        notes = _ensure_wk_fresh()
+        out = status_tools.vocabulary_status(_conn(), query)
+        out["staleness_notes"] = notes
+        return out
+
+    @mcp.tool()
+    @audit(_conn, "quick_calibration")
+    def quick_calibration() -> dict[str, Any]:
+        """First-run helper. Returns a calibration suggestion when most grammar
+        is unmarked, so the LLM can offer "bulk-mark up to N4 as known" rather
+        than starting a long walk.
+        """
+        return calibration_tools.quick_calibration(_conn())
 
     @mcp.tool()
     @audit(_conn, "walk_grammar")
@@ -222,11 +302,29 @@ def build_app() -> FastMCP:
     @mcp.tool()
     @audit(_conn, "log_production_attempt")
     def log_production_attempt(
-        prompt: str, my_answer: str, correct_answer: str, verdict: str
+        prompt: str,
+        my_answer: str,
+        correct_answer: str,
+        verdict: str,
+        grammar_points: list[str] | None = None,
+        vocabulary: list[str] | None = None,
+        per_item_verdicts: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Append a production attempt (prompt, user's answer, correct answer, verdict)."""
+        """Record a production attempt and link it to the grammar/vocab it exercised.
+
+        The grammar_points and vocabulary lists feed the practice-derived signal —
+        over time, what the user actually answers correctly outweighs what they
+        self-reported as "known".
+
+        per_item_verdicts: optional per-item override of the attempt-level verdict,
+        for finer granularity ("the prompt overall was partial but the user got the
+        〜ても part right and the 〜ながら part wrong").
+        """
         return log_tools.log_production_attempt(
-            _conn(), prompt, my_answer, correct_answer, verdict
+            _conn(), prompt, my_answer, correct_answer, verdict,
+            grammar_points=grammar_points,
+            vocabulary=vocabulary,
+            per_item_verdicts=per_item_verdicts,
         )
 
     @mcp.tool()
