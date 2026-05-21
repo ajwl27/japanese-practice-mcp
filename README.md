@@ -86,30 +86,35 @@ The server needs read-only access to your WaniKani account.
 1. Go to <https://www.wanikani.com/settings/personal_access_tokens>.
 2. Click **Generate a new token**.
 3. Leave all the permission checkboxes unchecked — read-only is enough.
-4. Copy the token. It starts with `wk_…`.
+4. Copy the token. It looks like a UUID:
+   `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
 
-Now tell the server about it. Pick one of these:
+Now tell the server about it. The easiest way is a small config file at a
+fixed location:
 
-**Option A — config file** (do this once, the server picks it up automatically):
+| Your OS | Folder to create | Full path to the file |
+|---|---|---|
+| Linux | `~/.config/japanese-practice-mcp/` | `~/.config/japanese-practice-mcp/config.toml` |
+| macOS | `~/Library/Application Support/japanese-practice-mcp/` | `~/Library/Application Support/japanese-practice-mcp/config.toml` |
+| Windows | `%APPDATA%\japanese-practice-mcp\` | `%APPDATA%\japanese-practice-mcp\config.toml` |
 
-Create the folder if it doesn't exist, and put a file called `config.toml`
-inside it:
+> **Where is `%APPDATA%` on Windows?** It's a shortcut to
+> `C:\Users\<your-username>\AppData\Roaming`. The fastest way to open it:
+> press **Win + R**, type `%APPDATA%`, hit Enter. A File Explorer window
+> opens at the right place. Create a new folder called
+> `japanese-practice-mcp` inside it, then create `config.toml` inside that.
 
-| Your OS | Folder path |
-|---|---|
-| Linux | `~/.config/japanese-practice-mcp/` |
-| macOS | `~/Library/Application Support/japanese-practice-mcp/` |
-| Windows | `%APPDATA%\japanese-practice-mcp\` |
-
-Inside `config.toml`:
+Put a single line in `config.toml`:
 
 ```toml
-wanikani_token = "wk_paste_your_token_here"
+wanikani_token = "paste-your-token-here"
 ```
 
-**Option B — environment variable** (handy if you don't want a config file):
+Save and close. The server will find it automatically next time it starts.
 
-Set `JPMCP_WANIKANI_TOKEN=wk_paste_your_token_here` before launching Claude.
+> If you'd rather use an environment variable, set
+> `JPMCP_WANIKANI_TOKEN=your-token` before launching Claude. The variable
+> takes precedence over the config file when both are set.
 
 ## Connect it to Claude
 
@@ -130,25 +135,42 @@ above.
 
 ### Claude desktop app
 
-Open the desktop app's settings → **Developer** → **Edit Config**. Add (or
-merge) the following into the JSON file that opens:
+The desktop app's **Settings → Extensions** screen is for one-click
+prepackaged extensions (`.mcpb` files reviewed by Anthropic). For a local
+project like this one, you still need to add a small JSON snippet by hand —
+the app provides a button that opens the right file for you.
 
-```json
-{
-  "mcpServers": {
-    "japanese-practice": {
-      "command": "uv",
-      "args": [
-        "--directory", "<ABSOLUTE_PATH_TO_REPO>",
-        "run", "python", "-m", "japanese_practice_mcp"
-      ]
-    }
-  }
-}
-```
+1. Open the Claude desktop app.
+2. Open **Settings → Developer → Edit Config**. This opens
+   `claude_desktop_config.json` in your text editor.
+3. Add (or merge) the `japanese-practice` entry below into the file. If
+   the file is empty, paste the whole block; if it already has
+   `mcpServers`, add the inner `"japanese-practice": {...}` entry alongside
+   the others.
 
-Save the file and restart the desktop app. You should see the tools become
-available in a fresh conversation.
+   ```json
+   {
+     "mcpServers": {
+       "japanese-practice": {
+         "command": "uv",
+         "args": [
+           "--directory", "<ABSOLUTE_PATH_TO_REPO>",
+           "run", "python", "-m", "japanese_practice_mcp"
+         ]
+       }
+     }
+   }
+   ```
+
+   Replace `<ABSOLUTE_PATH_TO_REPO>` with the full path to where you cloned
+   this repo (e.g. `C:\\Users\\you\\japanese-practice-mcp` on Windows —
+   **note the double backslashes** inside JSON strings).
+4. Save the file and fully quit + restart the desktop app.
+5. In a new conversation, you should see a small tool indicator (often a
+   slider/hammer icon) confirming the server is connected.
+
+If something goes wrong, the desktop app shows MCP server errors at
+**Settings → Developer**.
 
 ### First conversation
 
