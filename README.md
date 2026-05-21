@@ -1,55 +1,74 @@
 # japanese-practice-mcp
 
-A local MCP server that turns Claude into a *production-practice* partner for
-Japanese. It exposes what you already know (from WaniKani) and what you've
-marked or logged yourself (in a local SQLite database), so Claude can build
-prompts using only items in your active vocabulary, walk you through grammar
-quickly, and remember what you're struggling with across sessions.
+A bridge between [Claude](https://claude.ai) and your Japanese learning data,
+so Claude can build practice prompts using only the words and grammar **you
+already know**, walk you through unfamiliar grammar quickly, and remember what
+you're struggling with from one conversation to the next.
 
-## What it does
+You bring two things:
 
-In a Claude Code session, once registered, you can say things like:
+- A **WaniKani** account ([wanikani.com](https://www.wanikani.com)), the SRS
+  app that tracks the Japanese vocabulary and kanji you've learned. The
+  server reads your progress from WaniKani's API.
+- A way to chat with Claude that supports **MCP servers** — either
+  [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) (the CLI)
+  or the [Claude desktop app](https://claude.ai/download). (The browser
+  version of Claude doesn't currently work — it needs a remote-hosted
+  server, and this one runs locally on your computer.)
 
-- *"Walk me through N4 grammar I haven't marked, show a quick example with each, k/l/u/m."*
-- *"Give me 5 production prompts using stuff I solidly know."*
-- *"Actually 食べる is fading for me — mark it as struggling."*
+> **What's MCP?** It's a way for Claude to use tools you give it during a
+> conversation. This project provides such tools: ask Claude *"give me 5
+> production prompts using stuff I know"* and it calls these tools behind
+> the scenes to look up what's in your WaniKani Guru pile and what grammar
+> you've marked as confident.
+
+## What you can do
+
+Once it's set up, you can say things like this to Claude and it will just
+work:
+
+- *"Walk me through some N4 grammar I haven't marked yet — one at a time, give
+  me a quick example, and ask me whether I know each one."*
+- *"Give me 5 production prompts using vocabulary I solidly know."*
+- *"Actually 食べる is fading for me — mark it as something I'm struggling with."*
 - *"What should I be drilling right now?"*
-- *"I learned 足を引っ張る from Mariko today, log it."*
-- *"I keep getting 約束 wrong, add it to my priority list."*
-- *"Mark ても as learning."*
+- *"I learned the idiom 足を引っ張る today, log it for me."*
+- *"I keep getting 約束 wrong — add it to my priority list."*
+- *"Mark ても as something I'm learning."*
 
-Claude figures out which tool to call and disambiguates with you when your
-query matches multiple items.
+Claude figures out which tool to call. If your phrasing is ambiguous (say,
+multiple grammar points match), it'll ask you to clarify rather than guess.
 
 ## How it works
 
-Three data layers, one process, one SQLite file:
+Everything lives in one small SQLite database on your computer:
 
-1. **WaniKani cache (read-only mirror).** On startup, the server syncs WK
-   subjects and assignments into SQLite. Subjects refresh weekly; assignments
-   refresh hourly. When the WaniKani API is unreachable, you get cached data
-   with a `staleness_notes` field telling Claude how stale it is.
+1. **Your WaniKani progress** is mirrored locally so Claude can see, instantly,
+   which vocabulary you know at which SRS level. The mirror refreshes
+   automatically (weekly for the word list, hourly for your SRS state). If
+   WaniKani's servers are down, you keep working with the cached data.
+2. **A grammar list** (≈900 Japanese grammar points across JLPT N5–N1, from
+   the open [Bunpro deck dump](https://gitlab.com/flio/wkanki)) ships with
+   the project. You mark items as `learning`, `known`, or `mastered` as you
+   go. Anything you haven't touched is "unknown".
+3. **Personal notes:** words you've encountered but didn't know, expressions
+   you want to remember, phrases you got stuck trying to say, and corrections
+   on WaniKani's view of your knowledge (e.g. "yes WaniKani thinks I know
+   this, but actually I'm forgetting it").
 
-2. **Grammar split into seed + state.** A pinned snapshot of the
-   [flio/wkanki](https://gitlab.com/flio/wkanki) Bunpro grammar dump ships
-   with the repo as a read-only seed (canonical form + JLPT level only — no
-   readings, meanings, or examples). Your marks live in a separate
-   `grammar_state` table. If you've never touched a grammar point, it has no
-   row. Reseeding never overwrites your marks.
-
-3. **Personal-state tables.** WaniKani overrides (fading/struggling/priority/
-   buried), expressions you've logged, mined words you've encountered, stuck
-   phrases, production attempts — all in plain SQLite tables that Claude reads
-   and writes through tools.
-
-The schema deliberately stores **only the canonical form** for anything Claude
-can re-derive — no frozen readings, meanings, or type tags. Claude regenerates
-interpretation from the form on every read. This keeps the database small and
-prevents stale-metadata drift.
+When you talk to Claude, it reads from these tables, writes back when you
+ask it to record something, and uses your data to keep its prompts grounded
+in things you actually know.
 
 ## Install
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+You'll need:
+
+- **Python 3.11 or newer** ([python.org](https://www.python.org/downloads/))
+- **uv**, a Python package manager ([install instructions](https://docs.astral.sh/uv/getting-started/installation/))
+- **git** ([git-scm.com](https://git-scm.com/downloads))
+
+In a terminal:
 
 ```bash
 git clone https://github.com/ajwl27/japanese-practice-mcp.git
@@ -57,91 +76,140 @@ cd japanese-practice-mcp
 uv sync
 ```
 
-## Configure
+`uv sync` downloads the dependencies into an isolated environment. It takes
+about a minute.
 
-Get a WaniKani personal access token (read-only is sufficient):
-<https://www.wanikani.com/settings/personal_access_tokens>
+## Get a WaniKani token
 
-Then either drop a config file at the platform-default location:
+The server needs read-only access to your WaniKani account.
 
-- **Linux:** `~/.config/japanese-practice-mcp/config.toml`
-- **macOS:** `~/Library/Application Support/japanese-practice-mcp/config.toml`
-- **Windows:** `%APPDATA%\japanese-practice-mcp\config.toml`
+1. Go to <https://www.wanikani.com/settings/personal_access_tokens>.
+2. Click **Generate a new token**.
+3. Leave all the permission checkboxes unchecked — read-only is enough.
+4. Copy the token. It starts with `wk_…`.
+
+Now tell the server about it. Pick one of these:
+
+**Option A — config file** (do this once, the server picks it up automatically):
+
+Create the folder if it doesn't exist, and put a file called `config.toml`
+inside it:
+
+| Your OS | Folder path |
+|---|---|
+| Linux | `~/.config/japanese-practice-mcp/` |
+| macOS | `~/Library/Application Support/japanese-practice-mcp/` |
+| Windows | `%APPDATA%\japanese-practice-mcp\` |
+
+Inside `config.toml`:
 
 ```toml
-wanikani_token = "your-personal-access-token"
-# data_dir = "/custom/path"        # optional
-# subjects_max_age_days = 7        # optional
-# assignments_ttl_seconds = 3600   # optional
+wanikani_token = "wk_paste_your_token_here"
 ```
 
-…or set env vars (handy for keeping the token out of files):
+**Option B — environment variable** (handy if you don't want a config file):
 
-- `JPMCP_WANIKANI_TOKEN` — overrides the token from config
-- `JPMCP_DATA_DIR` — overrides the data directory
-- `JPMCP_CONFIG` — alternate config file path
+Set `JPMCP_WANIKANI_TOKEN=wk_paste_your_token_here` before launching Claude.
 
-## Register with Claude Code
+## Connect it to Claude
+
+### Claude Code (terminal)
+
+In any terminal:
 
 ```bash
 claude mcp add japanese-practice -- uv --directory <ABSOLUTE_PATH_TO_REPO> run python -m japanese_practice_mcp
 ```
 
-Verify with `claude mcp list`. First call to a vocab tool triggers an initial
-WaniKani sync (~30s for the full subject set).
+Replace `<ABSOLUTE_PATH_TO_REPO>` with the actual path to the folder you
+cloned (run `pwd` inside that folder to print it).
 
-## Tools
+Verify with `claude mcp list` — you should see `japanese-practice` in the
+list. Then start a Claude Code session and try one of the example prompts
+above.
+
+### Claude desktop app
+
+Open the desktop app's settings → **Developer** → **Edit Config**. Add (or
+merge) the following into the JSON file that opens:
+
+```json
+{
+  "mcpServers": {
+    "japanese-practice": {
+      "command": "uv",
+      "args": [
+        "--directory", "<ABSOLUTE_PATH_TO_REPO>",
+        "run", "python", "-m", "japanese_practice_mcp"
+      ]
+    }
+  }
+}
+```
+
+Save the file and restart the desktop app. You should see the tools become
+available in a fresh conversation.
+
+### First conversation
+
+The very first time you ask Claude something that needs your WaniKani data,
+the server downloads your full subject list from WaniKani. This takes about
+30 seconds. After that it's instant — the data is cached locally and only
+refreshed in the background.
+
+## The tools Claude can use
+
+You usually don't need to know these by name — Claude picks the right one
+based on what you ask. But here's the cheat sheet:
 
 | Tool | What it does |
 |---|---|
-| `list_known_vocabulary` | WK vocab at or above an SRS stage; auto-excludes fading/struggling/buried |
-| `is_word_known` | Fuzzy lookup by Japanese, kana, or English. Returns all matches with SRS + override |
-| `override_vocabulary` | Mark a WK item fading / struggling / priority / buried |
-| `list_known_grammar` | Grammar list filtered by status / JLPT level |
-| `mark_grammar` | Fuzzy status update; returns candidates on ambiguity |
-| `walk_grammar` | Stream one grammar point at a time + remaining count, for fast bulk-marking |
-| `sample_for_prompts` | Random vocab + grammar sample for prompt-building |
-| `list_priority_items` | Unified "what should I drill" view |
-| `log_expression` | Log an idiom / compound / proverb / set phrase |
-| `log_mined_word` | Log a word you didn't know |
-| `log_stuck_phrase` | Log an English phrase you got stuck trying to say |
-| `log_production_attempt` | Log a prompt + your answer + correct answer + verdict |
+| `list_known_vocabulary` | Lists WaniKani words you know at or above a given SRS stage. Skips anything you've flagged as fading, struggling, or buried. |
+| `is_word_known` | Looks up a word (in Japanese, kana, or English) and tells Claude where it is in your WaniKani progress. |
+| `override_vocabulary` | Marks a WaniKani word as fading, struggling, priority, or buried — to override what WaniKani thinks you know. |
+| `list_known_grammar` | Lists grammar points filtered by JLPT level and/or by how well you know them. |
+| `mark_grammar` | Records that you've reached a new status on a grammar point (learning / known / mastered). |
+| `walk_grammar` | Streams grammar points one at a time, with a remaining counter, for fast review sessions. |
+| `sample_for_prompts` | Picks a random sample of words and grammar to seed a practice prompt. |
+| `list_priority_items` | A combined "what should I drill right now" view across vocabulary, grammar, and your notes. |
+| `log_expression` | Records an idiom, four-character compound, proverb, set phrase, or onomatopoeia. |
+| `log_mined_word` | Records a word you encountered but didn't know. |
+| `log_stuck_phrase` | Records an English phrase you got stuck trying to say in Japanese. |
+| `log_production_attempt` | Records a production prompt, your answer, the correct answer, and how it went. |
 
-Every tool call is recorded in the `tool_audit` table.
+Every tool call is logged to a `tool_audit` table inside the database, so
+you can audit what Claude did later.
 
-## Schema philosophy
+## Where your data lives
 
-**Store the canonical form. Re-derive everything else.**
+Everything's in one SQLite file at `<data_dir>/japanese-practice.db`. The
+default `data_dir`:
 
-Meanings, readings, JLPT-level labels, type tags, examples — Claude can
-regenerate all of this from the canonical Japanese form on every read. Storing
-it freezes interpretation at write time and creates a maintenance burden for
-data that's easier to recompute. So the personal-state tables only carry what
-Claude *can't* infer: the user's status, their notes, timestamps, and the
-override state.
+| Your OS | Path |
+|---|---|
+| Linux | `~/.local/share/japanese-practice-mcp/` |
+| macOS | `~/Library/Application Support/japanese-practice-mcp/` |
+| Windows | `%LOCALAPPDATA%\japanese-practice-mcp\` |
 
-This applies to `grammar_state` (form + status + note + timestamp),
-`expressions` (form + context + note + timestamp), `mined_words` (word +
-context + note + timestamp), and `wk_overrides` (subject_id + status + note +
-timestamp). The grammar seed itself is form + JLPT level only.
+To back up everything you've logged and marked, copy that single `.db` file.
+The two adjacent `-wal` and `-shm` files are temporary and auto-recreated.
 
-## Data layout
+## Schema philosophy (for the curious)
 
-Everything lives in one SQLite database at `<data_dir>/japanese-practice.db`.
-Back it up by copying that file. WAL files (`-wal`, `-shm`) are auto-recreated.
+The database deliberately stores **only the canonical Japanese form** for
+anything Claude can re-derive — no frozen meanings, readings, or type tags.
+Meanings change with context; readings depend on how a word is used; type
+tags are interpretation. Claude regenerates all of that from the form on
+every read, which keeps the database small and avoids stale-metadata drift.
+
+So the personal-state tables only carry what Claude *can't* infer: your
+chosen status, your notes, timestamps, and override flags.
 
 ## Migrating from v0.1
 
-v0.2 changes the schema significantly. On first startup, the server applies a
-migration that:
-
-- Splits the old `grammar` table into `grammar_seed` (form + level) and
-  `grammar_state` (only your actual marks). The `reading` column is dropped.
-- Renames `unknown_words` → `mined_words` and adds a `note` column.
-- Creates new `expressions` and `wk_overrides` tables.
-
-User data is preserved. Migrations are idempotent and tracked in the
-`schema_version` table.
+If you used an earlier version, the v0.2 server auto-upgrades your database
+on first startup. Your existing marks and logs are preserved. Migrations are
+idempotent and tracked in a `schema_version` table.
 
 ## Decisions
 
@@ -157,25 +225,45 @@ User data is preserved. Migrations are idempotent and tracked in the
 | Tests | `pytest` + `pytest-httpx` | Standard; clean HTTP mocking |
 | License | MIT | Permissive |
 
-## Out of scope (deliberately deferred)
+## Out of scope (deliberately)
 
-Production-SRS scheduling, tutor brief tools, coverage checks on passages,
-cohort sampling, leech detection, log search, mined-vocab triage workflow,
-journal / marker UI, multi-source grammar reconciliation, auto-discovering
-Bunpro's rotating data hash.
+This project is intentionally small. It does **not** include: an SRS
+scheduler, a leech-detection algorithm, full-text search over your logs, a
+mined-vocab triage UI, a journal, a notes app, multi-source grammar
+reconciliation, or auto-discovery of Bunpro's rotating data hash. The tools
+here are the surface; the intelligence is Claude.
 
-## Tests
+## Running the tests
 
 ```bash
 uv run pytest
 ```
 
-## Remote transport (deferred)
+## Remote / hosted version (not yet)
 
-Tool logic is transport-agnostic — only [`server.py`](src/japanese_practice_mcp/server.py)
-knows about FastMCP. Adding HTTPS later means swapping `app.run()` for a
-Starlette mount; no tool logic changes.
+Right now the server only runs on your own machine, communicating with
+Claude over the standard MCP stdio transport. A future version could expose
+the same tools over HTTPS so that the browser version of Claude could use
+them too. The code is structured to make that swap easy — only `server.py`
+would need to change.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Configuration knobs
+
+For reference, the full set of optional settings in `config.toml`:
+
+```toml
+wanikani_token = "wk_…"              # required
+data_dir = "/custom/path"            # default: platform-appropriate user data dir
+subjects_max_age_days = 7            # how long before re-syncing WK's word list
+assignments_ttl_seconds = 3600       # how long before re-syncing your SRS state
+```
+
+Environment variables (override the file when set):
+
+- `JPMCP_WANIKANI_TOKEN`
+- `JPMCP_DATA_DIR`
+- `JPMCP_CONFIG` (alternate path to `config.toml`)
