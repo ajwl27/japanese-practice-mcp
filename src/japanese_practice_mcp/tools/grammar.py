@@ -23,30 +23,74 @@ def list_known_grammar(
     conn: sqlite3.Connection,
     status_filter: list[str] | None = None,
     level_filter: list[str] | None = None,
+    raw: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return grammar points matching filters.
+    """Return grammar points matching the filters.
 
-    Items absent from grammar_state are returned with status='unknown'.
+    By default returns items whose *effective* status (manual ∪ practice) is in
+    ("known", "solid", "mastered"). Practice signal of "solid"/"weak" overrides
+    the user's self-reported manual status.
+
+    status_filter: filter on effective_status by default; with raw=True applies
+      to raw manual_status (treating absent rows as 'unknown').
+    level_filter: JLPT levels.
+    raw: when True, returns the v0.2 shape with the manual status under "status".
     """
+    from japanese_practice_mcp.practice import (
+        compute_practice_signal,
+        fetch_grammar_events,
+        grammar_effective_status,
+    )
+
     where: list[str] = []
     params: list[Any] = []
     if level_filter:
         where.append(f"s.jlpt_level IN ({','.join('?' for _ in level_filter)})")
         params.extend(level_filter)
-    if status_filter:
-        where.append(
-            f"COALESCE(st.status, 'unknown') IN ({','.join('?' for _ in status_filter)})"
-        )
-        params.extend(status_filter)
     sql = (
         "SELECT s.grammar_point, s.jlpt_level, "
-        "       COALESCE(st.status, 'unknown') AS status, st.note "
+        "       COALESCE(st.status, 'unknown') AS manual_status, st.note "
         "FROM grammar_seed s LEFT JOIN grammar_state st USING (grammar_point)"
     )
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY s.jlpt_level DESC, s.grammar_point ASC"
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    rows = conn.execute(sql, params).fetchall()
+
+    if raw:
+        items = [
+            {
+                "grammar_point": r["grammar_point"],
+                "jlpt_level": r["jlpt_level"],
+                "status": r["manual_status"],
+                "note": r["note"],
+            }
+            for r in rows
+        ]
+        if status_filter:
+            items = [i for i in items if i["status"] in status_filter]
+        return items
+
+    effective_filter = status_filter or ["known", "solid", "mastered"]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        gp = r["grammar_point"]
+        manual = r["manual_status"] if r["manual_status"] != "unknown" else None
+        events = fetch_grammar_events(conn, gp)
+        sig = compute_practice_signal(events)
+        eff = grammar_effective_status(manual, sig["signal"])
+        if eff in effective_filter:
+            out.append(
+                {
+                    "grammar_point": gp,
+                    "jlpt_level": r["jlpt_level"],
+                    "manual_status": r["manual_status"],
+                    "practice_signal": sig["signal"],
+                    "effective_status": eff,
+                    "note": r["note"],
+                }
+            )
+    return out
 
 
 def mark_grammar(

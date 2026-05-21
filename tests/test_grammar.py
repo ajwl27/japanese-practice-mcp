@@ -88,10 +88,10 @@ def test_mark_grammar_upsert(tmp_db_path: Path) -> None:
     assert row["note"] == "now solid"
 
 
-def test_list_known_grammar_returns_all_with_implicit_unknown(tmp_db_path: Path) -> None:
+def test_list_known_grammar_raw_returns_all_with_implicit_unknown(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
     mark_grammar(conn, "は", "known")
-    out = list_known_grammar(conn)
+    out = list_known_grammar(conn, raw=True)
     by_gp = {x["grammar_point"]: x for x in out}
     assert by_gp["は"]["status"] == "known"
     assert by_gp["も"]["status"] == "unknown"
@@ -99,19 +99,61 @@ def test_list_known_grammar_returns_all_with_implicit_unknown(tmp_db_path: Path)
     assert by_gp["も"]["jlpt_level"] == "N5"
 
 
-def test_list_known_grammar_filters_by_status_including_implicit(tmp_db_path: Path) -> None:
+def test_list_known_grammar_raw_filters_by_status_including_implicit(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
     mark_grammar(conn, "は", "known")
-    out = list_known_grammar(conn, status_filter=["unknown"])
+    out = list_known_grammar(conn, status_filter=["unknown"], raw=True)
     points = {x["grammar_point"] for x in out}
     assert "は" not in points
     assert "も" in points
 
 
-def test_list_known_grammar_filters_by_level(tmp_db_path: Path) -> None:
+def test_list_known_grammar_raw_filters_by_level(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
-    out = list_known_grammar(conn, level_filter=["N4"])
+    out = list_known_grammar(conn, level_filter=["N4"], raw=True)
     assert {x["grammar_point"] for x in out} == {"ない", "ながら", "ても"}
+
+
+def test_list_known_grammar_default_filters_to_effective_known(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
+    mark_grammar(conn, "は", "known")
+    mark_grammar(conn, "も", "learning")
+    out = list_known_grammar(conn)
+    points = {x["grammar_point"] for x in out}
+    assert "は" in points        # known → included
+    assert "も" not in points    # learning → excluded
+    assert "が" not in points    # implicit unknown → excluded
+
+
+def test_list_known_grammar_practice_solid_included(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
+    # 'が' is unmarked → unknown; give it 3 correct → solid, override → included
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="correct", grammar_points=["が"],
+        )
+    out = list_known_grammar(conn)
+    points = {x["grammar_point"] for x in out}
+    assert "が" in points
+    g_row = next(x for x in out if x["grammar_point"] == "が")
+    assert g_row["effective_status"] == "solid"
+    assert g_row["manual_status"] == "unknown"
+
+
+def test_list_known_grammar_practice_weak_excluded(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
+    mark_grammar(conn, "は", "known")
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", grammar_points=["は"],
+        )
+    out = list_known_grammar(conn)
+    points = {x["grammar_point"] for x in out}
+    assert "は" not in points  # practice=weak overrides manual=known → excluded
 
 
 def test_walk_grammar_streams_one_at_a_time(tmp_db_path: Path) -> None:
