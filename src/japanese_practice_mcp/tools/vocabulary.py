@@ -14,8 +14,13 @@ def list_known_vocabulary(
     limit: int = 500,
 ) -> list[dict[str, Any]]:
     """Return WK vocab at or above the given SRS stage, excluding overrides
-    marked fading/struggling/buried.
+    marked fading/struggling/buried AND items with practice_signal='weak'.
     """
+    from japanese_practice_mcp.practice import (
+        compute_practice_signal,
+        fetch_vocabulary_events,
+    )
+
     placeholders = ",".join("?" for _ in HIDE_FROM_KNOWN)
     cur = conn.execute(
         f"""
@@ -32,18 +37,27 @@ def list_known_vocabulary(
         """,
         (min_srs_stage, *HIDE_FROM_KNOWN, limit),
     )
-    return [
-        {
-            "subject_id": r["id"],
-            "characters": r["characters"],
-            "meanings": json.loads(r["meanings"]),
-            "readings": json.loads(r["readings"]),
-            "level": r["level"],
-            "srs_stage": r["srs_stage"],
-            "override_status": r["override_status"],
-        }
-        for r in cur.fetchall()
-    ]
+    out: list[dict[str, Any]] = []
+    for r in cur.fetchall():
+        events = fetch_vocabulary_events(
+            conn, subject_id=r["id"], word_form=r["characters"]
+        )
+        sig = compute_practice_signal(events)
+        if sig["signal"] == "weak":
+            continue
+        out.append(
+            {
+                "subject_id": r["id"],
+                "characters": r["characters"],
+                "meanings": json.loads(r["meanings"]),
+                "readings": json.loads(r["readings"]),
+                "level": r["level"],
+                "srs_stage": r["srs_stage"],
+                "override_status": r["override_status"],
+                "practice_signal": sig["signal"],
+            }
+        )
+    return out
 
 
 def is_word_known(conn: sqlite3.Connection, query: str) -> dict[str, Any]:

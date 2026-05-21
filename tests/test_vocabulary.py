@@ -99,6 +99,20 @@ def test_is_word_known_unknown(tmp_db_path: Path) -> None:
     assert out["matches"] == []
 
 
+def test_list_known_excludes_practice_weak(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", vocabulary=["猫"],
+        )
+    items = list_known_vocabulary(conn, min_srs_stage=5)
+    chars = {x["characters"] for x in items}
+    assert "猫" not in chars
+    assert "犬" in chars
+
+
 def test_is_word_known_exact_match_wins(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
     conn.execute(
