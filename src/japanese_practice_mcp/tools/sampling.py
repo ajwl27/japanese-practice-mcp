@@ -5,6 +5,37 @@ from typing import Any
 from japanese_practice_mcp.tools.grammar import list_known_grammar
 from japanese_practice_mcp.tools.vocabulary import list_known_vocabulary
 
+# Items with effective_status == "solid" get extra weight in the sampler.
+_SOLID_WEIGHT = 3
+_MASTERED_WEIGHT = 2
+_KNOWN_WEIGHT = 1
+
+
+def _weight_for(item: dict, status_key: str) -> int:
+    s = item.get(status_key)
+    if s == "solid":
+        return _SOLID_WEIGHT
+    if s == "mastered":
+        return _MASTERED_WEIGHT
+    return _KNOWN_WEIGHT
+
+
+def _weighted_sample(
+    pool: list[dict], count: int, rng: random.Random, status_key: str
+) -> list[dict]:
+    if not pool or count <= 0:
+        return []
+    indices = list(range(len(pool)))
+    weights = [_weight_for(p, status_key) for p in pool]
+    chosen: list[int] = []
+    for _ in range(min(count, len(pool))):
+        idx = rng.choices(indices, weights=weights, k=1)[0]
+        pos = indices.index(idx)
+        indices.pop(pos)
+        weights.pop(pos)
+        chosen.append(idx)
+    return [pool[i] for i in chosen]
+
 
 def sample_for_prompts(
     conn: sqlite3.Connection,
@@ -15,9 +46,9 @@ def sample_for_prompts(
 ) -> dict[str, Any]:
     """Return a random sample of vocab + grammar matching the filters.
 
-    Vocab is automatically pre-filtered to exclude fading/struggling/buried by
-    list_known_vocabulary, so "give me prompts using stuff I solidly know" works
-    naturally.
+    Vocab is automatically pre-filtered to exclude fading/struggling/buried AND
+    practice-weak items. Grammar uses effective_status (known/solid/mastered)
+    by default. "Solid" items get extra sampling weight.
     """
     rng = rng or random.Random()
     vocab_filter = vocab_filter or {}
@@ -34,11 +65,12 @@ def sample_for_prompts(
         level_filter=grammar_filter.get("level_filter"),
     )
 
-    rng.shuffle(vocab_pool)
-    rng.shuffle(grammar_pool)
+    vocab_chosen = _weighted_sample(vocab_pool, count, rng, "practice_signal")
+    grammar_chosen = _weighted_sample(grammar_pool, count, rng, "effective_status")
+
     return {
-        "vocabulary": vocab_pool[:count],
-        "grammar": grammar_pool[:count],
+        "vocabulary": vocab_chosen,
+        "grammar": grammar_chosen,
         "vocab_pool_size": len(vocab_pool),
         "grammar_pool_size": len(grammar_pool),
     }

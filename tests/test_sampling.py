@@ -46,7 +46,25 @@ def test_sample_returns_filtered_items(tmp_db_path: Path) -> None:
     for v in out["vocabulary"]:
         assert v["srs_stage"] >= 5
     for g in out["grammar"]:
-        assert g["status"] == "known"
+        assert g["effective_status"] == "known"
+
+
+def test_sample_excludes_practice_weak_vocab(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", vocabulary=["猫"],
+        )
+    out = sample_for_prompts(
+        conn, count=10,
+        vocab_filter={"min_srs_stage": 5},
+        grammar_filter={},
+        rng=random.Random(0),
+    )
+    chars = {v["characters"] for v in out["vocabulary"]}
+    assert "猫" not in chars
 
 
 def test_sample_count_caps_results(tmp_db_path: Path) -> None:
