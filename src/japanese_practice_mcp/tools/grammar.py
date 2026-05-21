@@ -1,10 +1,22 @@
+"""Grammar tools.
+
+Personal state lives in `grammar_state` — only marked items have a row there.
+Everything not in `grammar_state` is implicitly status='unknown'. This means:
+
+- `mark_grammar` is an UPSERT into grammar_state.
+- `list_known_grammar` LEFT JOINs grammar_seed → grammar_state and synthesizes
+  the implicit unknown status.
+- `walk_grammar` does the same JOIN, applies filters, advances past the
+  previously-returned point.
+"""
 import hashlib
 import json
 import sqlite3
-from typing import Any, Literal
+from typing import Any
 
-VALID_STATUSES = ("unknown", "learning", "known", "mastered")
-RESPONSE_TO_STATUS = {"k": "known", "l": "learning", "u": "unknown", "m": "mastered"}
+from japanese_practice_mcp.resolve import resolve_grammar
+
+VALID_STATUSES = ("learning", "known", "mastered")  # 'unknown' is implicit
 
 
 def list_known_grammar(
@@ -12,51 +24,77 @@ def list_known_grammar(
     status_filter: list[str] | None = None,
     level_filter: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    """Return grammar points matching filters.
+
+    Items absent from grammar_state are returned with status='unknown'.
+    """
     where: list[str] = []
     params: list[Any] = []
-    if status_filter:
-        where.append(f"status IN ({','.join('?' for _ in status_filter)})")
-        params.extend(status_filter)
     if level_filter:
-        where.append(f"jlpt_level IN ({','.join('?' for _ in level_filter)})")
+        where.append(f"s.jlpt_level IN ({','.join('?' for _ in level_filter)})")
         params.extend(level_filter)
-    sql = "SELECT grammar_point, reading, jlpt_level, status, note FROM grammar"
+    if status_filter:
+        where.append(
+            f"COALESCE(st.status, 'unknown') IN ({','.join('?' for _ in status_filter)})"
+        )
+        params.extend(status_filter)
+    sql = (
+        "SELECT s.grammar_point, s.jlpt_level, "
+        "       COALESCE(st.status, 'unknown') AS status, st.note "
+        "FROM grammar_seed s LEFT JOIN grammar_state st USING (grammar_point)"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY jlpt_level DESC, grammar_point ASC"
+    sql += " ORDER BY s.jlpt_level DESC, s.grammar_point ASC"
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def mark_grammar(
     conn: sqlite3.Connection,
-    grammar_point: str,
+    query: str,
     status: str,
     note: str | None = None,
 ) -> dict[str, Any]:
+    """Set status (and optional note) for the grammar point resolved from `query`.
+
+    On ambiguous resolution, returns {"resolved": None, "candidates": [...]} without
+    writing — caller is expected to disambiguate and retry with the canonical form.
+    """
     if status not in VALID_STATUSES:
         raise ValueError(
-            f"invalid status {status!r}; must be one of {VALID_STATUSES}"
+            f"invalid status {status!r}; must be one of {VALID_STATUSES} "
+            "(use the absence of a mark to represent 'unknown')"
         )
+    candidates = resolve_grammar(conn, query)
+    if not candidates:
+        raise LookupError(f"no grammar point found for query {query!r}")
+    if len(candidates) > 1:
+        return {"resolved": None, "candidates": candidates, "query": query}
+
+    canonical = candidates[0]
     if note is None:
-        cur = conn.execute(
-            "UPDATE grammar SET status = ?, updated_at = datetime('now') "
-            "WHERE grammar_point = ?",
-            (status, grammar_point),
+        conn.execute(
+            "INSERT INTO grammar_state (grammar_point, status, marked_at) "
+            "VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(grammar_point) DO UPDATE SET "
+            "  status=excluded.status, marked_at=datetime('now')",
+            (canonical, status),
         )
     else:
-        cur = conn.execute(
-            "UPDATE grammar SET status = ?, note = ?, updated_at = datetime('now') "
-            "WHERE grammar_point = ?",
-            (status, note, grammar_point),
+        conn.execute(
+            "INSERT INTO grammar_state (grammar_point, status, note, marked_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(grammar_point) DO UPDATE SET "
+            "  status=excluded.status, note=excluded.note, marked_at=datetime('now')",
+            (canonical, status, note),
         )
-    if cur.rowcount == 0:
-        raise LookupError(f"grammar point not found: {grammar_point!r}")
     row = conn.execute(
-        "SELECT grammar_point, reading, jlpt_level, status, note FROM grammar "
-        "WHERE grammar_point = ?",
-        (grammar_point,),
+        "SELECT s.grammar_point, s.jlpt_level, st.status, st.note "
+        "FROM grammar_seed s LEFT JOIN grammar_state st USING (grammar_point) "
+        "WHERE s.grammar_point = ?",
+        (canonical,),
     ).fetchone()
-    return dict(row)
+    return {"resolved": canonical, **dict(row)}
 
 
 def _filter_hash(level_filter: list[str] | None, status_filter: list[str] | None) -> str:
@@ -71,73 +109,87 @@ def walk_grammar(
     conn: sqlite3.Connection,
     level_filter: list[str] | None = None,
     status_filter: list[str] | None = None,
-    previous_response: Literal["k", "l", "u", "m", "s"] | None = None,
 ) -> dict[str, Any]:
-    """Stream one grammar point at a time for bulk-marking.
+    """Return the next grammar point matching the filters, plus remaining count.
 
-    Stateful via the `walk_state` table. If `previous_response` is supplied and
-    the state row's current_grammar_id is set, the previous point's status is
-    updated (unless response is 's' = skip).
+    Stateful: tracks the previously-returned grammar_point so consecutive calls
+    advance through the list. Filter change resets the cursor.
+
+    Claude is expected to call `mark_grammar` between walks to record k/l/u/m.
     """
     fh = _filter_hash(level_filter, status_filter)
     state = conn.execute("SELECT * FROM walk_state WHERE id = 1").fetchone()
 
-    if previous_response and state and state["filter_hash"] == fh and state["current_grammar_id"]:
-        if previous_response != "s":
-            new_status = RESPONSE_TO_STATUS.get(previous_response)
-            if new_status is None:
-                raise ValueError(
-                    f"invalid previous_response {previous_response!r}; expected one of k/l/u/m/s"
-                )
-            conn.execute(
-                "UPDATE grammar SET status = ?, updated_at = datetime('now') WHERE id = ?",
-                (new_status, state["current_grammar_id"]),
-            )
+    advance_past: str | None = None
+    if state and state["filter_hash"] == fh and state["last_grammar_point"]:
+        advance_past = state["last_grammar_point"]
 
     where: list[str] = []
     params: list[Any] = []
     if level_filter:
-        where.append(f"jlpt_level IN ({','.join('?' for _ in level_filter)})")
+        where.append(f"s.jlpt_level IN ({','.join('?' for _ in level_filter)})")
         params.extend(level_filter)
     if status_filter:
-        where.append(f"status IN ({','.join('?' for _ in status_filter)})")
+        where.append(
+            f"COALESCE(st.status, 'unknown') IN ({','.join('?' for _ in status_filter)})"
+        )
         params.extend(status_filter)
-    sql = "SELECT id, grammar_point, reading, jlpt_level, status, note FROM grammar"
+    if advance_past is not None:
+        where.append("s.grammar_point > ?")
+        params.append(advance_past)
+
+    sql = (
+        "SELECT s.grammar_point, s.jlpt_level, "
+        "       COALESCE(st.status, 'unknown') AS status, st.note "
+        "FROM grammar_seed s LEFT JOIN grammar_state st USING (grammar_point)"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY jlpt_level DESC, id ASC LIMIT 1"
+    sql += " ORDER BY s.jlpt_level DESC, s.grammar_point ASC LIMIT 1"
     nxt = conn.execute(sql, params).fetchone()
+
+    count_where: list[str] = []
+    count_params: list[Any] = []
+    if level_filter:
+        count_where.append(f"s.jlpt_level IN ({','.join('?' for _ in level_filter)})")
+        count_params.extend(level_filter)
+    if status_filter:
+        count_where.append(
+            f"COALESCE(st.status, 'unknown') IN ({','.join('?' for _ in status_filter)})"
+        )
+        count_params.extend(status_filter)
+    count_sql = (
+        "SELECT COUNT(*) FROM grammar_seed s "
+        "LEFT JOIN grammar_state st USING (grammar_point)"
+    )
+    if count_where:
+        count_sql += " WHERE " + " AND ".join(count_where)
+    remaining = conn.execute(count_sql, count_params).fetchone()[0]
 
     if nxt is None:
         conn.execute(
-            "INSERT INTO walk_state (id, filter_hash, current_grammar_id, updated_at) "
+            "INSERT INTO walk_state (id, filter_hash, last_grammar_point, updated_at) "
             "VALUES (1, ?, NULL, datetime('now')) "
             "ON CONFLICT(id) DO UPDATE SET filter_hash=excluded.filter_hash, "
-            "current_grammar_id=NULL, updated_at=datetime('now')",
+            "  last_grammar_point=NULL, updated_at=datetime('now')",
             (fh,),
         )
-        return {"done": True, "item": None, "remaining_estimate": 0}
+        return {"done": True, "item": None, "remaining": 0}
 
     conn.execute(
-        "INSERT INTO walk_state (id, filter_hash, current_grammar_id, updated_at) "
+        "INSERT INTO walk_state (id, filter_hash, last_grammar_point, updated_at) "
         "VALUES (1, ?, ?, datetime('now')) "
         "ON CONFLICT(id) DO UPDATE SET filter_hash=excluded.filter_hash, "
-        "current_grammar_id=excluded.current_grammar_id, updated_at=datetime('now')",
-        (fh, nxt["id"]),
+        "  last_grammar_point=excluded.last_grammar_point, updated_at=datetime('now')",
+        (fh, nxt["grammar_point"]),
     )
-    count_sql = "SELECT COUNT(*) FROM grammar"
-    if where:
-        count_sql += " WHERE " + " AND ".join(where)
-    remaining = conn.execute(count_sql, params).fetchone()[0]
     return {
         "done": False,
-        "item": {
-            "grammar_point": nxt["grammar_point"],
-            "reading": nxt["reading"],
-            "jlpt_level": nxt["jlpt_level"],
-            "status": nxt["status"],
-            "note": nxt["note"],
-        },
-        "remaining_estimate": remaining,
-        "hint": "Respond with previous_response='k' (known), 'l' (learning), 'u' (unknown), 'm' (mastered), or 's' (skip).",
+        "item": dict(nxt),
+        "remaining": remaining,
+        "hint": (
+            "Generate a fresh example + 1-line explanation for the user, then "
+            "call mark_grammar(<grammar_point>, 'known'|'learning'|'mastered') "
+            "or skip the mark entirely. Then call walk_grammar again for the next."
+        ),
     }
