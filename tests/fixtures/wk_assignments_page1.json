@@ -1,0 +1,9 @@
+{
+  "object": "collection",
+  "total_count": 2,
+  "pages": { "next_url": null, "previous_url": null, "per_page": 500 },
+  "data": [
+    { "id": 100, "object": "assignment", "data": { "subject_id": 1, "subject_type": "vocabulary", "srs_stage": 5 } },
+    { "id": 101, "object": "assignment", "data": { "subject_id": 2, "subject_type": "vocabulary", "srs_stage": 2 } }
+  ]
+}
