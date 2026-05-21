@@ -72,3 +72,80 @@ def test_log_empty_form_rejected(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn)
     with pytest.raises(ValueError):
         log_expression(conn, form="   ")
+
+
+def test_log_attempt_records_grammar_events(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    out = log_production_attempt(
+        conn,
+        prompt="...", my_answer="...", correct_answer="...",
+        verdict="correct",
+        grammar_points=["〜ても", "〜ながら"],
+    )
+    rows = conn.execute(
+        "SELECT grammar_point, verdict, attempt_id FROM grammar_practice_events"
+    ).fetchall()
+    points = {r["grammar_point"] for r in rows}
+    assert points == {"〜ても", "〜ながら"}
+    assert all(r["attempt_id"] == out["id"] for r in rows)
+    assert all(r["verdict"] == "correct" for r in rows)
+
+
+def test_log_attempt_records_vocabulary_events(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    log_production_attempt(
+        conn,
+        prompt="...", my_answer="...", correct_answer="...",
+        verdict="incorrect",
+        vocabulary=["猫", "犬"],
+    )
+    rows = conn.execute(
+        "SELECT word_form, verdict FROM vocabulary_practice_events"
+    ).fetchall()
+    words = {r["word_form"] for r in rows}
+    assert words == {"猫", "犬"}
+    assert all(r["verdict"] == "incorrect" for r in rows)
+
+
+def test_log_attempt_vocabulary_by_subject_id(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    log_production_attempt(
+        conn,
+        prompt="...", my_answer="...", correct_answer="...",
+        verdict="correct",
+        vocabulary=[42, 99],
+    )
+    rows = conn.execute(
+        "SELECT subject_id, word_form FROM vocabulary_practice_events"
+    ).fetchall()
+    assert {r["subject_id"] for r in rows} == {42, 99}
+    assert all(r["word_form"] is None for r in rows)
+
+
+def test_log_attempt_per_item_verdicts(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    log_production_attempt(
+        conn,
+        prompt="...", my_answer="...", correct_answer="...",
+        verdict="partial",
+        grammar_points=["〜ても", "〜ながら"],
+        per_item_verdicts={"〜ても": "correct", "〜ながら": "incorrect"},
+    )
+    rows = conn.execute(
+        "SELECT grammar_point, verdict FROM grammar_practice_events"
+    ).fetchall()
+    verdicts = {r["grammar_point"]: r["verdict"] for r in rows}
+    assert verdicts == {"〜ても": "correct", "〜ながら": "incorrect"}
+
+
+def test_log_attempt_no_links_no_events(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    log_production_attempt(
+        conn,
+        prompt="...", my_answer="...", correct_answer="...",
+        verdict="correct",
+    )
+    n_g = conn.execute("SELECT COUNT(*) FROM grammar_practice_events").fetchone()[0]
+    n_v = conn.execute("SELECT COUNT(*) FROM vocabulary_practice_events").fetchone()[0]
+    assert n_g == 0
+    assert n_v == 0
