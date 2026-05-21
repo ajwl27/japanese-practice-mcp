@@ -13,37 +13,40 @@ def test_init_schema_creates_tables(tmp_db_path: Path) -> None:
     names = {r[0] for r in rows}
     expected = {
         "wk_subjects", "wk_assignments", "wk_cache_meta",
-        "grammar", "stuck_phrases", "production_attempts",
-        "unknown_words", "tool_audit", "walk_state",
+        "grammar_seed", "grammar_state",
+        "expressions", "mined_words", "wk_overrides",
+        "stuck_phrases", "production_attempts",
+        "tool_audit", "walk_state", "schema_version",
     }
-    assert expected.issubset(names)
+    assert expected.issubset(names), f"missing: {expected - names}"
+    assert "grammar" not in names, "legacy grammar table should not exist"
+    assert "unknown_words" not in names, "legacy unknown_words table should not exist"
 
 
 def test_init_schema_is_idempotent(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path)
     init_schema(conn)
-    init_schema(conn)  # must not raise
+    init_schema(conn)
 
 
-def test_grammar_status_check_rejects_bad_value(tmp_db_path: Path) -> None:
+def test_grammar_state_status_check(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path)
+    init_schema(conn)
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('x', 'N5')")
+    try:
+        conn.execute("INSERT INTO grammar_state (grammar_point, status) VALUES ('x', 'bogus')")
+    except sqlite3.IntegrityError:
+        return
+    raise AssertionError("expected IntegrityError on bad status")
+
+
+def test_wk_override_status_check(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path)
     init_schema(conn)
     try:
         conn.execute(
-            "INSERT INTO grammar (grammar_point, jlpt_level, status) "
-            "VALUES ('x', 'N5', 'bogus')"
+            "INSERT INTO wk_overrides (subject_id, override_status) VALUES (1, 'bogus')"
         )
     except sqlite3.IntegrityError:
         return
-    raise AssertionError("expected IntegrityError")
-
-
-def test_walk_state_single_row(tmp_db_path: Path) -> None:
-    conn = connect(tmp_db_path)
-    init_schema(conn)
-    conn.execute("INSERT INTO walk_state (id) VALUES (1)")
-    try:
-        conn.execute("INSERT INTO walk_state (id) VALUES (2)")
-    except sqlite3.IntegrityError:
-        return
-    raise AssertionError("expected walk_state id=2 to violate CHECK")
+    raise AssertionError("expected IntegrityError on bad override_status")
