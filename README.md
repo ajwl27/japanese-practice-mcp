@@ -6,9 +6,6 @@ marked or logged yourself (in a local SQLite database), so Claude can build
 prompts using only items in your active vocabulary, walk you through grammar
 quickly, and remember what you're struggling with across sessions.
 
-Runs entirely on your laptop. No data leaves your machine except read-only
-calls to the WaniKani API.
-
 ## What it does
 
 In a Claude Code session, once registered, you can say things like:

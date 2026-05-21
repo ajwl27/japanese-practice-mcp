@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where uv *)",
+      "Bash(uv --version)",
+      "Bash(where gh *)",
+      "Bash(gh --version)",
+      "Bash(curl -sL --max-time 30 \"https://gitlab.com/flio/wkanki/-/raw/main/bunpro/deck_index.json\")",
+      "Bash(curl -sL --max-time 30 \"https://gitlab.com/flio/wkanki/-/raw/main/bunpro/deck_index.json\" -o /tmp/bunpro.json)",
+      "Bash(python -c ' *)",
+      "Bash(curl -sL --max-time 30 \"https://gitlab.com/flio/wkanki/-/raw/main/bunpro/deck_index.json\" -o \"C:/Users/orca/japanese-practice-mcp/_tmp_bunpro.json\")",
+      "Bash(python -X utf8 -c ' *)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(gh auth *)",
+      "Bash(uv sync *)",
+      "Bash(uv run *)",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(mkdir -p seed)",
+      "Bash(curl -fsSL \"https://gitlab.com/flio/wkanki/-/raw/main/bunpro/deck_index.json\" -o seed/bunpro_deck_index.json)",
+      "PowerShell($env:JPMCP_WANIKANI_TOKEN = \"dummy-token-for-smoke-test\"; $env:JPMCP_DATA_DIR = \"$PWD\\\\.smoke\"; $proc = Start-Process -FilePath \"uv\" -ArgumentList \"run\",\"python\",\"-m\",\"japanese_practice_mcp\" -PassThru -RedirectStandardError \".smoke-err.log\" -RedirectStandardOutput \".smoke-out.log\" -NoNewWindow; Start-Sleep -Seconds 4; if \\(-not $proc.HasExited\\) { Write-Host \"RUNNING \\(good\\)\"; Stop-Process -Id $proc.Id -Force } else { Write-Host \"EXITED with code $\\($proc.ExitCode\\)\"; Get-Content .smoke-err.log -ErrorAction SilentlyContinue }; Get-Content .smoke-err.log -ErrorAction SilentlyContinue | Select-Object -First 30)",
+      "Bash(gh repo *)",
+      "Bash(git push *)",
+      "PowerShell($env:JPMCP_WANIKANI_TOKEN = \"dummy\"; $env:JPMCP_DATA_DIR = \"$PWD\\\\.smoke\"; $proc = Start-Process -FilePath \"uv\" -ArgumentList \"run\",\"python\",\"-m\",\"japanese_practice_mcp\" -PassThru -NoNewWindow -RedirectStandardError \".smoke-err.log\" -RedirectStandardOutput \".smoke-out.log\"; Start-Sleep -Seconds 4; if \\(-not $proc.HasExited\\) { Write-Host \"RUNNING\"; Stop-Process -Id $proc.Id -Force } else { Get-Content .smoke-err.log })"
+    ]
+  }
+}
