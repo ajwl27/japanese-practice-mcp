@@ -4,9 +4,10 @@ import pytest
 
 from japanese_practice_mcp.db import connect, init_schema
 from japanese_practice_mcp.tools.logs import (
+    log_expression,
+    log_mined_word,
     log_production_attempt,
     log_stuck_phrase,
-    log_unknown_word,
 )
 
 
@@ -37,20 +38,37 @@ def test_log_production_attempt(tmp_db_path: Path) -> None:
     )
     assert out["id"] >= 1
     row = conn.execute(
-        "SELECT prompt, my_answer, correct_answer, verdict FROM production_attempts"
+        "SELECT prompt, verdict FROM production_attempts"
     ).fetchone()
     assert row["verdict"] == "correct"
 
 
-def test_log_unknown_word(tmp_db_path: Path) -> None:
+def test_log_mined_word(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn)
-    log_unknown_word(conn, word="紛争", context="news headline")
-    row = conn.execute("SELECT word, context FROM unknown_words").fetchone()
+    out = log_mined_word(conn, word="紛争", context="news headline")
+    assert out["id"] >= 1
+    row = conn.execute("SELECT word, context FROM mined_words").fetchone()
     assert row["word"] == "紛争"
     assert row["context"] == "news headline"
 
 
-def test_log_empty_phrase_rejected(tmp_db_path: Path) -> None:
+def test_log_expression(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    out = log_expression(conn, form="足を引っ張る", context="learned from Mariko")
+    assert out["id"] >= 1
+    row = conn.execute("SELECT form, context FROM expressions").fetchone()
+    assert row["form"] == "足を引っ張る"
+    assert row["context"] == "learned from Mariko"
+
+
+def test_log_expression_no_context(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    log_expression(conn, form="一石二鳥")
+    row = conn.execute("SELECT context FROM expressions").fetchone()
+    assert row["context"] is None
+
+
+def test_log_empty_form_rejected(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn)
     with pytest.raises(ValueError):
-        log_stuck_phrase(conn, phrase="   ")
+        log_expression(conn, form="   ")

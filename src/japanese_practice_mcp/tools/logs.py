@@ -40,14 +40,33 @@ def log_production_attempt(
     return {"id": cur.lastrowid, "prompt": p, "verdict": v}
 
 
-def log_unknown_word(
+def log_mined_word(
     conn: sqlite3.Connection,
     word: str,
     context: str | None = None,
+    note: str | None = None,
 ) -> dict[str, Any]:
     w = _require(word, "word")
     cur = conn.execute(
-        "INSERT INTO unknown_words (word, context) VALUES (?, ?)",
-        (w, context),
+        "INSERT INTO mined_words (word, context, note) VALUES (?, ?, ?)",
+        (w, context, note),
     )
-    return {"id": cur.lastrowid, "word": w, "context": context}
+    return {"id": cur.lastrowid, "word": w, "context": context, "note": note}
+
+
+def log_expression(
+    conn: sqlite3.Connection,
+    form: str,
+    context: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Log a multi-word expression: idiom, compound, proverb, set phrase, onomatopoeia.
+
+    Only the canonical form is stored — Claude reinterprets meaning/reading on read.
+    """
+    f = _require(form, "form")
+    cur = conn.execute(
+        "INSERT INTO expressions (form, context, note) VALUES (?, ?, ?)",
+        (f, context, note),
+    )
+    return {"id": cur.lastrowid, "form": f, "context": context, "note": note}
