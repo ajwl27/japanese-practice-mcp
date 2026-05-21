@@ -73,21 +73,34 @@ def test_resolve_grammar_exact(tmp_db_path: Path) -> None:
 
 
 def test_resolve_grammar_exact_wins_over_substring(tmp_db_path: Path) -> None:
-    """When an exact match exists, return only it — don't also surface substring matches."""
-    conn = connect(tmp_db_path); init_schema(conn); _seed_grammar(conn)
-    out = resolve_grammar(conn, "ば")
-    assert out == ["ば"]
+    """When the query exact-matches one entry, return only it — substring matches are excluded."""
+    conn = connect(tmp_db_path); init_schema(conn)
+    for gp in ["〜て", "〜てもいい", "〜てから"]:
+        conn.execute(
+            "INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES (?, 'N4')", (gp,)
+        )
+    out = resolve_grammar(conn, "て")
+    assert out == ["〜て"]
 
 
 def test_resolve_grammar_substring_when_no_exact(tmp_db_path: Path) -> None:
     """When no exact match, fall back to substring — surface all candidates."""
     conn = connect(tmp_db_path); init_schema(conn)
-    for gp, level in [("～ば", "N4"), ("～ばよかった", "N4")]:
+    for gp in ["〜ばよかった", "〜ばと思う"]:
         conn.execute(
-            "INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES (?, ?)", (gp, level)
+            "INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES (?, 'N3')", (gp,)
         )
+    out = resolve_grammar(conn, "ばよ")
+    assert out == ["〜ばよかった"]
+
+
+def test_resolve_grammar_multiple_tilde_equivalents_are_all_exact(tmp_db_path: Path) -> None:
+    """If seed has BOTH 'ば' and '〜ば', querying 'ば' returns both — tilde is ignored
+    in the match key, so they are equivalent exact matches and Claude must disambiguate.
+    """
+    conn = connect(tmp_db_path); init_schema(conn); _seed_grammar(conn)
     out = resolve_grammar(conn, "ば")
-    assert set(out) == {"～ば", "～ばよかった"}
+    assert set(out) == {"ば", "～ば"}
 
 
 def test_resolve_grammar_strips_english_descriptors(tmp_db_path: Path) -> None:
@@ -97,12 +110,50 @@ def test_resolve_grammar_strips_english_descriptors(tmp_db_path: Path) -> None:
 
 
 def test_resolve_grammar_conditional_prefix(tmp_db_path: Path) -> None:
-    """'Conditional ば' → 'ば' (after stripping descriptor) → exact match."""
+    """'Conditional ば' → 'ば' (after stripping descriptor). Both 'ば' and '～ば'
+    are tilde-equivalent exact matches in this seed.
+    """
     conn = connect(tmp_db_path); init_schema(conn); _seed_grammar(conn)
     out = resolve_grammar(conn, "Conditional ば")
-    assert out == ["ば"]
+    assert set(out) == {"ば", "～ば"}
 
 
 def test_resolve_grammar_none(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed_grammar(conn)
     assert resolve_grammar(conn, "Mandarin") == []
+
+
+def test_resolve_grammar_exact_wins_against_substring_matches(tmp_db_path: Path) -> None:
+    """When the query exact-matches one seed entry AND substring-matches others,
+    return only the exact match. This is the v0.3 bug fix.
+    """
+    conn = connect(tmp_db_path); init_schema(conn)
+    for gp in ["〜て", "〜てもいい", "〜て + B", "Verb + て + Verb"]:
+        conn.execute(
+            "INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES (?, 'N4')", (gp,)
+        )
+    out = resolve_grammar(conn, "Verb + て")
+    assert out == ["〜て"]
+
+
+def test_resolve_grammar_tilde_prefix_tolerant(tmp_db_path: Path) -> None:
+    """Querying without the leading 〜 should still match an entry that has it."""
+    conn = connect(tmp_db_path); init_schema(conn)
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('〜ても', 'N4')")
+    out = resolve_grammar(conn, "ても")
+    assert out == ["〜ても"]
+
+
+def test_resolve_grammar_whitespace_tolerant(tmp_db_path: Path) -> None:
+    conn = connect(tmp_db_path); init_schema(conn)
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('〜ても', 'N4')")
+    out = resolve_grammar(conn, "  ても  ")
+    assert out == ["〜ても"]
+
+
+def test_resolve_grammar_nfkc_half_width_tilde(tmp_db_path: Path) -> None:
+    """Half-width tilde (～, U+FF5E) and wave-dash (〜, U+301C) should be equivalent."""
+    conn = connect(tmp_db_path); init_schema(conn)
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('〜ても', 'N4')")
+    out = resolve_grammar(conn, "～ても")
+    assert out == ["〜ても"]

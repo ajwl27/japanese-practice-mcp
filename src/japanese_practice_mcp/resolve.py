@@ -3,10 +3,14 @@
 Used by any tool that accepts natural-language identifiers. Returns ALL
 candidates on ambiguity — callers are expected to disambiguate with the user
 rather than silently picking one.
+
+Bug fix in v0.3: exact match (after NFKC + tilde + whitespace normalization)
+always wins, even when the query is also a substring of other entries.
 """
 import json
 import re
 import sqlite3
+import unicodedata
 from typing import Any
 
 _GRAMMAR_DESCRIPTORS = [
@@ -18,6 +22,17 @@ _DESCRIPTOR_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_STRIP_RE = re.compile(r"[\s+\-]")
+_TILDE_CHARS = "〜～~"
+
+
+def _match_key(s: str) -> str:
+    """Canonical key for tolerant equality comparison."""
+    s = unicodedata.normalize("NFKC", s).lower()
+    s = s.lstrip(_TILDE_CHARS)
+    s = _STRIP_RE.sub("", s)
+    return s
+
 
 def _normalize_grammar_query(query: str) -> str:
     q = _DESCRIPTOR_RE.sub("", query)
@@ -27,38 +42,53 @@ def _normalize_grammar_query(query: str) -> str:
 
 
 def resolve_grammar(conn: sqlite3.Connection, query: str) -> list[str]:
-    """Return all grammar_seed rows whose grammar_point matches the query.
+    """Return canonical grammar_points matching the query.
 
-    Exact match (case-insensitive) wins outright. Otherwise substring match.
+    Algorithm:
+      1. Strip English descriptors from the query.
+      2. Compute a normalization key (NFKC + lowercase + strip tilde prefix +
+         strip whitespace/+/−).
+      3. Scan all seed points; collect those whose key equals the query key
+         (exact) OR whose key contains the query key (substring).
+      4. If any exact matches exist, return ONLY them. Otherwise return all
+         substring matches.
     """
     q = _normalize_grammar_query(query)
     if not q:
         return []
-    exact = conn.execute(
-        "SELECT grammar_point FROM grammar_seed "
-        "WHERE LOWER(grammar_point) = LOWER(?)",
-        (q,),
-    ).fetchall()
+    q_key = _match_key(q)
+    if not q_key:
+        return []
+
+    rows = conn.execute("SELECT grammar_point FROM grammar_seed").fetchall()
+
+    exact: list[str] = []
+    substring: list[str] = []
+    for r in rows:
+        gp = r["grammar_point"]
+        gp_key = _match_key(gp)
+        if gp_key == q_key:
+            exact.append(gp)
+        elif q_key in gp_key:
+            substring.append(gp)
+
     if exact:
-        return [r["grammar_point"] for r in exact]
-    like = conn.execute(
-        "SELECT grammar_point FROM grammar_seed "
-        "WHERE LOWER(grammar_point) LIKE LOWER('%' || ? || '%') "
-        "ORDER BY LENGTH(grammar_point) ASC, grammar_point ASC",
-        (q,),
-    ).fetchall()
-    return [r["grammar_point"] for r in like]
+        return exact
+    substring.sort(key=lambda s: (len(s), s))
+    return substring
 
 
 def resolve_vocabulary(conn: sqlite3.Connection, query: str) -> list[dict[str, Any]]:
     """Return WK vocabulary subjects matching the query.
 
-    Match priority: exact characters → exact reading → exact meaning →
-    substring characters → substring reading → substring meaning.
+    Tiered: exact characters / exact reading / exact meaning win in that order
+    (NFKC-normalized for Japanese). Falls back to substring in the same order.
     """
     q = query.strip()
     if not q:
         return []
+    q_norm = unicodedata.normalize("NFKC", q)
+    q_key = _match_key(q)
     q_lower = q.lower()
 
     rows = conn.execute(
@@ -84,14 +114,17 @@ def resolve_vocabulary(conn: sqlite3.Connection, query: str) -> list[dict[str, A
             "level": r["level"],
         }
         chars = r["characters"] or ""
+        chars_key = _match_key(chars)
+        readings_keys = [_match_key(rd) for rd in readings]
         meanings_lower = [m.lower() for m in meanings]
-        if chars == q:
+
+        if q_key and chars_key == q_key:
             exact_chars.append(item)
-        elif q in readings:
+        elif q_key and q_key in readings_keys:
             exact_reading.append(item)
         elif q_lower in meanings_lower:
             exact_meaning.append(item)
-        elif q in chars:
+        elif q_norm and q_norm in chars:
             sub_chars.append(item)
         elif any(q in rd for rd in readings):
             sub_reading.append(item)

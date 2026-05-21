@@ -44,13 +44,14 @@ def test_mark_grammar_fuzzy_match(tmp_db_path: Path) -> None:
 
 def test_mark_grammar_ambiguous_returns_candidates(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed(conn)
-    # Add ambiguous similar entries WITHOUT an exact match for the query
-    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('～たり', 'N4')")
-    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('～たりする', 'N4')")
+    # No exact match for "たり" — only substring matches.
+    # (Note: '〜たり' as a single entry WOULD be a tilde-equivalent exact match, so
+    #  for true ambiguity we use two entries where 'たり' is only a substring.)
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('〜たりする', 'N4')")
+    conn.execute("INSERT INTO grammar_seed (grammar_point, jlpt_level) VALUES ('〜たり〜たり', 'N4')")
     out = mark_grammar(conn, "たり", "learning")
     assert out["resolved"] is None
-    assert "candidates" in out
-    assert set(out["candidates"]) == {"～たり", "～たりする"}
+    assert set(out["candidates"]) == {"〜たりする", "〜たり〜たり"}
     n = conn.execute("SELECT COUNT(*) FROM grammar_state").fetchone()[0]
     assert n == 0
 
