@@ -91,6 +91,50 @@ def test_priority_includes_mined_words(tmp_db_path: Path) -> None:
     assert "紛争" in words
 
 
+def test_priority_includes_practice_weak_grammar(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed_grammar(conn)
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", grammar_points=["は"],
+        )
+    out = list_priority_items(conn)
+    pts = [g for g in out["grammar"] if g["grammar_point"] == "は"]
+    assert len(pts) == 1
+    assert pts[0]["reason"] == "practice_weak"
+
+
+def test_priority_includes_practice_weak_vocab(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    conn = connect(tmp_db_path); init_schema(conn); _seed_vocab(conn)
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", vocabulary=[1],
+        )
+    out = list_priority_items(conn)
+    vs = [v for v in out["vocabulary"] if v["characters"] == "猫"]
+    assert len(vs) == 1
+    assert vs[0]["reason"] == "practice_weak"
+
+
+def test_priority_practice_weak_not_duplicated_with_override(tmp_db_path: Path) -> None:
+    from japanese_practice_mcp.tools.logs import log_production_attempt
+    from japanese_practice_mcp.tools.overrides import override_vocabulary
+    conn = connect(tmp_db_path); init_schema(conn); _seed_vocab(conn)
+    override_vocabulary(conn, "猫", "struggling")
+    for _ in range(3):
+        log_production_attempt(
+            conn, prompt="x", my_answer="y", correct_answer="z",
+            verdict="incorrect", vocabulary=[1],
+        )
+    out = list_priority_items(conn)
+    vs = [v for v in out["vocabulary"] if v["characters"] == "猫"]
+    assert len(vs) == 1
+    assert vs[0]["reason"] == "override"
+
+
 def test_priority_count_totals(tmp_db_path: Path) -> None:
     conn = connect(tmp_db_path); init_schema(conn); _seed_vocab(conn); _seed_grammar(conn)
     override_vocabulary(conn, "猫", "priority")
