@@ -27,17 +27,24 @@ You bring two things:
 Once it's set up, you can say things like this to Claude and it will just
 work:
 
-- *"Walk me through some N4 grammar I haven't marked yet — one at a time, give
-  me a quick example, and ask me whether I know each one."*
+- *"I'm N4-ish — mark everything up to and including N4 as known to start."*
+  → one bulk call, calibration done in seconds.
+- *"Walk me through some N3 grammar I haven't marked yet, give me a quick
+  example with each, and ask me whether I know it."*
 - *"Give me 5 production prompts using vocabulary I solidly know."*
-- *"Actually 食べる is fading for me — mark it as something I'm struggling with."*
-- *"What should I be drilling right now?"*
+- *"What grammar am I actually getting wrong lately?"*
+- *"I keep failing 〜ても even though I said I knew it — what's going on?"*
 - *"I learned the idiom 足を引っ張る today, log it for me."*
+- *"Actually 食べる is fading for me — mark it as something I'm struggling with."*
 - *"I keep getting 約束 wrong — add it to my priority list."*
-- *"Mark ても as something I'm learning."*
 
-Claude figures out which tool to call. If your phrasing is ambiguous (say,
-multiple grammar points match), it'll ask you to clarify rather than guess.
+Claude figures out which tool to call. There are two views of "what you
+know": the **status you've marked yourself**, and a **practice-derived
+signal** rolled from your production-attempt history. When the two
+disagree — you marked something "known" but you keep getting it wrong —
+the practice signal wins. Items you've never practiced fall back to your
+manual mark. If your phrasing is ambiguous, Claude asks rather than
+guesses.
 
 ## How it works
 
@@ -202,21 +209,51 @@ based on what you ask. But here's the cheat sheet:
 
 | Tool | What it does |
 |---|---|
-| `list_known_vocabulary` | Lists WaniKani words you know at or above a given SRS stage. Skips anything you've flagged as fading, struggling, or buried. |
-| `is_word_known` | Looks up a word (in Japanese, kana, or English) and tells Claude where it is in your WaniKani progress. |
-| `override_vocabulary` | Marks a WaniKani word as fading, struggling, priority, or buried — to override what WaniKani thinks you know. |
-| `list_known_grammar` | Lists grammar points filtered by JLPT level and/or by how well you know them. |
-| `mark_grammar` | Records that you've reached a new status on a grammar point (learning / known / mastered). |
-| `walk_grammar` | Streams grammar points one at a time, with a remaining counter, for fast review sessions. |
-| `sample_for_prompts` | Picks a random sample of words and grammar to seed a practice prompt. |
-| `list_priority_items` | A combined "what should I drill right now" view across vocabulary, grammar, and your notes. |
-| `log_expression` | Records an idiom, four-character compound, proverb, set phrase, or onomatopoeia. |
-| `log_mined_word` | Records a word you encountered but didn't know. |
-| `log_stuck_phrase` | Records an English phrase you got stuck trying to say in Japanese. |
-| `log_production_attempt` | Records a production prompt, your answer, the correct answer, and how it went. |
+| `list_known_vocabulary` | WK vocab at or above an SRS stage; excludes fading/struggling/buried AND practice-weak items |
+| `is_word_known` | Fuzzy lookup by Japanese, kana, or English; returns SRS + override |
+| `vocabulary_status` | Full report on one word: SRS, override, practice signal, effective status |
+| `override_vocabulary` | Mark a WK item fading / struggling / priority / buried |
+| `list_known_grammar` | Grammar list filtered by *effective* status (manual + practice) by default |
+| `mark_grammar` | Fuzzy status update on one grammar point |
+| `bulk_mark_grammar` | One-call status update over an entire JLPT level or list — for fast onboarding |
+| `grammar_status` | Full report on one grammar point: manual, practice, effective status |
+| `walk_grammar` | Stream one grammar point at a time + remaining count, for fast review |
+| `quick_calibration` | Inspects how much you've marked; suggests bulk actions if the DB is cold |
+| `sample_for_prompts` | Random vocab + grammar sample, weighted toward practice-confirmed items |
+| `list_priority_items` | "What should I drill" — overrides + learning + practice-weak items |
+| `log_expression` | Log an idiom / compound / proverb / set phrase |
+| `log_mined_word` | Log a word you didn't know |
+| `log_stuck_phrase` | Log an English phrase you got stuck trying to say |
+| `log_production_attempt` | Log a prompt + answer + verdict; links to the grammar / vocab it exercised |
 
 Every tool call is logged to a `tool_audit` table inside the database, so
 you can audit what Claude did later.
+
+## Practice-derived knowledge signal
+
+Self-report is a cold start. The real signal is what you actually produce
+correctly. Each time Claude logs a production attempt for you, it tells
+the server which grammar points and vocabulary the prompt exercised; those
+land in `grammar_practice_events` and `vocabulary_practice_events`.
+
+A simple 30-day rolling-window heuristic turns those events into a
+**practice signal**:
+
+| signal | meaning |
+|---|---|
+| `solid` | ≥3 successes in last 30 days with no failures, or ≥80% success over your last ≥5 rated attempts |
+| `weak` | ≥2 failures in last 30 days, or <50% success over your last ≥3 rated attempts |
+| `shaky` | Some recent activity but neither rule fires |
+| `untested` | No relevant practice in the last 90 days |
+
+The **effective status** combines manual + practice: `solid` and `weak`
+override your self-reported status; otherwise the system falls back to
+what you marked. `list_known_grammar` defaults to "effective status is
+known, solid, or mastered" — what you actually know, not just what you
+said you knew.
+
+This is intentionally a simple rolling-window heuristic, not a full SRS
+algorithm. Tunable later if real usage warrants it.
 
 ## Where your data lives
 
@@ -243,11 +280,21 @@ every read, which keeps the database small and avoids stale-metadata drift.
 So the personal-state tables only carry what Claude *can't* infer: your
 chosen status, your notes, timestamps, and override flags.
 
-## Migrating from v0.1
+## Migrating from earlier versions
 
-If you used an earlier version, the v0.2 server auto-upgrades your database
-on first startup. Your existing marks and logs are preserved. Migrations are
-idempotent and tracked in a `schema_version` table.
+The server auto-upgrades your database on first startup. Your existing
+marks and logs are preserved. Migrations are idempotent and tracked in a
+`schema_version` table.
+
+- **v0.1 → v0.2:** Grammar table split into `grammar_seed` (form + level) +
+  `grammar_state` (your actual marks); the `reading` column is dropped.
+  `unknown_words` renamed to `mined_words` with a `note` column added.
+  New `expressions` and `wk_overrides` tables created.
+- **v0.2 → v0.3:** Added `grammar_practice_events` and
+  `vocabulary_practice_events` to record per-attempt practice linkage.
+  Existing production attempts are NOT backfilled — they're treated as
+  exercising nothing. New attempts will populate the event tables, and
+  the practice-derived signal will grow from there.
 
 ## Decisions
 

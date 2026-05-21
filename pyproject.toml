@@ -1,6 +1,6 @@
 [project]
 name = "japanese-practice-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local MCP server exposing my Japanese learning data to Claude clients for production practice."
 readme = "README.md"
 requires-python = ">=3.11"
