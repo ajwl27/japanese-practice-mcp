@@ -120,18 +120,34 @@ Save and close. The server will find it automatically next time it starts.
 
 ### Claude Code (terminal)
 
-In any terminal:
+In **macOS / Linux / Git Bash on Windows**:
 
 ```bash
 claude mcp add japanese-practice -- uv --directory <ABSOLUTE_PATH_TO_REPO> run python -m japanese_practice_mcp
 ```
 
-Replace `<ABSOLUTE_PATH_TO_REPO>` with the actual path to the folder you
-cloned (run `pwd` inside that folder to print it).
+In **Windows PowerShell**, the `--` separator gets eaten before reaching
+Claude Code. Use the `--%` stop-parsing token instead:
 
-Verify with `claude mcp list` — you should see `japanese-practice` in the
-list. Then start a Claude Code session and try one of the example prompts
-above.
+```powershell
+claude mcp add japanese-practice --% -- uv --directory C:/Users/you/japanese-practice-mcp run python -m japanese_practice_mcp
+```
+
+Replace the path with where you cloned the repo (run `pwd` inside that
+folder to see it). **Use forward slashes** in the path — they work on
+Windows and avoid backslash-escaping headaches.
+
+Verify with `claude mcp list` — you should see
+`japanese-practice: ... - ✓ Connected`.
+
+By default the server is added at "local" scope (the current project
+only). To make it available from any directory, add `-s user`:
+
+```bash
+claude mcp add japanese-practice -s user -- uv --directory <ABSOLUTE_PATH_TO_REPO> run python -m japanese_practice_mcp
+```
+
+Then start a Claude Code session and try one of the example prompts above.
 
 ### Claude desktop app
 
